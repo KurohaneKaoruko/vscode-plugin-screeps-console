@@ -3,15 +3,14 @@
   "publisher": "screeps-tools",
   "displayName": "Screeps Console",
   "description": "Connect to Screeps Console via WebSocket",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "engines": {
     "vscode": "^1.75.0"
   },
   "categories": [
     "Other"
   ],
-  "activationEvents": [
-  ],
+  "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [

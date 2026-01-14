@@ -1,0 +1,10 @@
+.github/**
+.trae/**
+.vscode/**
+src/**
+**/*.ts
+**/*.map
+tsconfig.json
+package-lock.json
+*.vsix
+

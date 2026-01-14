@@ -66,6 +66,7 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
+    "package": "npx --yes @vscode/vsce package --allow-missing-repository",
     "watch": "tsc -watch -p ./"
   },
   "devDependencies": {

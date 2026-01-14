@@ -34,6 +34,15 @@ export class ScreepsConsoleViewProvider implements vscode.WebviewViewProvider {
             switch (raw.type) {
                 case 'ready':
                     this.post({ type: 'setStatus', text: 'Ready' });
+                    // Auto-connect if token exists
+                    const token = await this.context.secrets.get('screeps_token');
+                    if (token) {
+                        try {
+                            await this.connect(true); // true = auto-connect mode
+                        } catch (err) {
+                            // Silent fail on auto-connect, just stay disconnected
+                        }
+                    }
                     break;
                 case 'connect':
                     await this.connect();
@@ -70,16 +79,35 @@ export class ScreepsConsoleViewProvider implements vscode.WebviewViewProvider {
         this.view?.show?.(true);
     }
 
-    private async connect(): Promise<void> {
-        const token = await this.getOrPromptToken();
+    private async connect(isAutoConnect: boolean = false): Promise<void> {
+        // If auto-connecting, only get existing token, don't prompt
+        let token: string | undefined;
+        if (isAutoConnect) {
+            token = await this.context.secrets.get('screeps_token');
+        } else {
+            token = await this.getOrPromptToken();
+        }
+
         if (!token) {
-            this.post({ type: 'appendLog', text: 'Token is required.', kind: 'error' });
+            if (!isAutoConnect) {
+                this.post({ type: 'appendLog', text: 'Token is required.', kind: 'error' });
+            }
             return;
         }
 
         if (this.client && this.lastToken === token) {
             this.post({ type: 'setStatus', text: 'Connecting…' });
-            await this.client.connect();
+            try {
+                await this.client.connect();
+            } catch (err: any) {
+                if (!isAutoConnect) {
+                    this.post({ type: 'appendLog', text: `Connection failed: ${err.message}`, kind: 'error' });
+                    this.post({ type: 'setStatus', text: 'Disconnected' });
+                } else {
+                     // Reset status on silent fail
+                     this.post({ type: 'setStatus', text: 'Disconnected' });
+                }
+            }
             return;
         }
 
@@ -92,8 +120,16 @@ export class ScreepsConsoleViewProvider implements vscode.WebviewViewProvider {
         this.client.on('console', (msg: string) => this.post({ type: 'appendLog', text: msg, kind: 'log' }));
 
         this.post({ type: 'setStatus', text: 'Connecting…' });
-        await this.client.connect();
-        this.post({ type: 'setStatus', text: 'Connected' });
+        try {
+            await this.client.connect();
+            this.post({ type: 'setStatus', text: 'Connected' });
+        } catch (err: any) {
+             this.disconnect(); // Ensure clean state
+             if (!isAutoConnect) {
+                this.post({ type: 'appendLog', text: `Connection failed: ${err.message}`, kind: 'error' });
+             }
+             // On auto-connect failure, we just stay disconnected (as requested)
+        }
     }
 
     private disconnect(): void {

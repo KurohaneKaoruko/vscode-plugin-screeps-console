@@ -67,6 +67,11 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "package": "npx --yes @vscode/vsce package --allow-missing-repository",
+    "release": "node scripts/release.js",
+    "release:patch": "node scripts/release.js patch",
+    "release:minor": "node scripts/release.js minor",
+    "release:major": "node scripts/release.js major",
+    "release:dry": "node scripts/release.js --dry-run",
     "watch": "tsc -watch -p ./"
   },
   "devDependencies": {

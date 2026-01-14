@@ -2,9 +2,9 @@
 .trae/**
 .vscode/**
 src/**
+scripts/**
 **/*.ts
 **/*.map
 tsconfig.json
 package-lock.json
 *.vsix
-

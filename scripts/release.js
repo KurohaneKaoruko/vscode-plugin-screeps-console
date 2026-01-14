@@ -30,19 +30,10 @@ function runInherit(cmd) {
 function ensureCleanGit() {
   const status = run('git status --porcelain');
   if (status.length !== 0) {
-    const canPrompt = Boolean(process.stdin.isTTY) && !dryRun && !yes;
-    if (!canPrompt) {
+    if (!canUseInteractiveMenu()) {
       process.stderr.write('Working tree is not clean. Commit or stash changes first.\n');
       process.exit(1);
     }
-
-    process.stdout.write('Working tree is not clean:\n');
-    process.stdout.write(`${status}\n`);
-    process.stdout.write('Choose how to proceed:\n');
-    process.stdout.write('  1) abort\n');
-    process.stdout.write('  2) commit all changes, then continue\n');
-    process.stdout.write('  3) stash all changes, then continue\n');
-    process.stdout.write('  4) continue anyway\n');
   }
 }
 
@@ -69,35 +60,123 @@ function bumpVersion(v, kind) {
   return `${p.major}.${p.minor}.${p.patch + 1}`;
 }
 
+function canUseInteractiveMenu() {
+  return Boolean(process.stdin.isTTY) && !dryRun && !yes;
+}
+
 function ask(question) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => rl.question(question, (ans) => { rl.close(); resolve(ans); }));
+}
+
+function selectMenu(title, options, initialIndex = 0) {
+  if (!canUseInteractiveMenu()) {
+    return Promise.resolve(initialIndex);
+  }
+
+  return new Promise((resolve, reject) => {
+    const stdin = process.stdin;
+    const stdout = process.stdout;
+    const maxIndex = Math.max(0, options.length - 1);
+    let index = Math.min(Math.max(initialIndex, 0), maxIndex);
+
+    readline.emitKeypressEvents(stdin);
+    stdin.setRawMode(true);
+    stdin.resume();
+
+    function render(firstRender) {
+      if (firstRender) {
+        stdout.write(`${title}\n`);
+        for (let i = 0; i < options.length; i++) {
+          const prefix = i === index ? '> ' : '  ';
+          stdout.write(`${prefix}${options[i]}\n`);
+        }
+        return;
+      }
+
+      readline.moveCursor(stdout, 0, -options.length);
+      for (let i = 0; i < options.length; i++) {
+        readline.clearLine(stdout, 0);
+        readline.cursorTo(stdout, 0);
+        const prefix = i === index ? '> ' : '  ';
+        stdout.write(`${prefix}${options[i]}\n`);
+      }
+    }
+
+    function cleanup() {
+      stdin.off('keypress', onKeypress);
+      stdin.setRawMode(false);
+      stdin.pause();
+    }
+
+    function onKeypress(_str, key) {
+      if (key?.name === 'up') {
+        index = index <= 0 ? maxIndex : index - 1;
+        render(false);
+        return;
+      }
+      if (key?.name === 'down') {
+        index = index >= maxIndex ? 0 : index + 1;
+        render(false);
+        return;
+      }
+      if (key?.name === 'return') {
+        cleanup();
+        stdout.write('\n');
+        resolve(index);
+        return;
+      }
+      if (key?.name === 'escape' || (key?.name === 'c' && key?.ctrl)) {
+        cleanup();
+        stdout.write('\n');
+        reject(new Error('Canceled'));
+      }
+    }
+
+    stdin.on('keypress', onKeypress);
+    render(true);
+  });
 }
 
 async function resolveDirtyWorkingTreeIfNeeded() {
   const status = run('git status --porcelain');
   if (status.length === 0) return;
 
-  const canPrompt = Boolean(process.stdin.isTTY) && !dryRun && !yes;
-  if (!canPrompt) {
+  if (!canUseInteractiveMenu()) {
     process.stderr.write('Working tree is not clean. Commit or stash changes first.\n');
     process.exit(1);
   }
 
-  const choice = String(await ask('Choice (1-4): ')).trim();
-  if (choice === '2') {
+  process.stdout.write('Working tree is not clean:\n');
+  process.stdout.write(`${status}\n`);
+
+  let choice;
+  try {
+    choice = await selectMenu('How to proceed?', [
+      'abort',
+      'commit all changes, then continue',
+      'stash all changes, then continue',
+      'continue anyway'
+    ]);
+  } catch {
+    process.stderr.write('Release canceled.\n');
+    process.exit(1);
+  }
+
+  if (choice === 1) {
     runInherit('git add -A');
     runInherit('git commit -m "chore: prepare release"');
     return;
   }
-  if (choice === '3') {
+  if (choice === 2) {
     runInherit('git stash push -u -m "pre-release"');
     return;
   }
-  if (choice === '4') {
+  if (choice === 3) {
     npmVersionForce = true;
     return;
   }
+
   process.stderr.write('Release canceled.\n');
   process.exit(1);
 }
@@ -106,20 +185,28 @@ async function chooseNextVersion(currentVersion) {
   if (explicitVersion) return explicitVersion;
   if (bumpArg) return bumpVersion(currentVersion, bumpArg);
 
-  const canPrompt = Boolean(process.stdin.isTTY) && !dryRun && !yes;
-  if (!canPrompt) return bumpVersion(currentVersion, 'patch');
+  if (!canUseInteractiveMenu()) return bumpVersion(currentVersion, 'patch');
 
   process.stdout.write(`Current version: ${currentVersion}\n`);
-  process.stdout.write('Select release type:\n');
-  process.stdout.write('  1) patch\n');
-  process.stdout.write('  2) minor\n');
-  process.stdout.write('  3) major\n');
-  process.stdout.write('  4) custom (enter X.Y.Z)\n');
+  const patchPreview = bumpVersion(currentVersion, 'patch');
+  const minorPreview = bumpVersion(currentVersion, 'minor');
+  const majorPreview = bumpVersion(currentVersion, 'major');
+  let choice;
+  try {
+    choice = await selectMenu('Select release type:', [
+      `patch (${patchPreview})`,
+      `minor (${minorPreview})`,
+      `major (${majorPreview})`,
+      'custom (enter X.Y.Z)'
+    ]);
+  } catch {
+    process.stderr.write('Release canceled.\n');
+    process.exit(1);
+  }
 
-  const choice = String(await ask('Choice (1-4): ')).trim();
-  if (choice === '2') return bumpVersion(currentVersion, 'minor');
-  if (choice === '3') return bumpVersion(currentVersion, 'major');
-  if (choice === '4') {
+  if (choice === 1) return bumpVersion(currentVersion, 'minor');
+  if (choice === 2) return bumpVersion(currentVersion, 'major');
+  if (choice === 3) {
     const v = String(await ask('Version (X.Y.Z): ')).trim();
     return v;
   }

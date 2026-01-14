@@ -3,7 +3,7 @@
   "publisher": "screeps-tools",
   "displayName": "Screeps Console",
   "description": "Connect to Screeps Console via WebSocket",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "engines": {
     "vscode": "^1.75.0"
   },
@@ -11,10 +11,6 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:screeps-console.open",
-    "onCommand:screeps-console.resetToken",
-    "onTerminalProfile:screeps-console.profile",
-    "onView:screeps-console.view"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -44,6 +40,7 @@
     "views": {
       "screepsConsolePanel": [
         {
+          "icon": "media/screeps.svg",
           "type": "webview",
           "id": "screeps-console.view",
           "name": "Console"

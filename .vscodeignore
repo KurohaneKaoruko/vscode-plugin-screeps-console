@@ -3,6 +3,8 @@
 .vscode/**
 src/**
 scripts/**
+out/**
+node_modules/**
 **/*.ts
 **/*.map
 tsconfig.json

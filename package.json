@@ -11,7 +11,7 @@
     "Other"
   ],
   "activationEvents": [],
-  "main": "./out/extension.js",
+  "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
@@ -60,8 +60,9 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run bundle",
     "compile": "tsc -p ./",
+    "bundle": "npm run compile && npx --yes esbuild ./out/extension.js --bundle --platform=node --format=cjs --outfile=./dist/extension.js --external:vscode",
     "package": "npx --yes @vscode/vsce package --allow-missing-repository",
     "release": "node scripts/release.js",
     "release:patch": "node scripts/release.js patch",
@@ -74,6 +75,7 @@
     "@types/node": "^16.x",
     "@types/vscode": "^1.75.0",
     "@types/ws": "^8.5.4",
+    "esbuild": "^0.20.2",
     "typescript": "^4.9.5"
   },
   "dependencies": {

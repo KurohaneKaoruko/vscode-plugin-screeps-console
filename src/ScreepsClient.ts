@@ -8,39 +8,54 @@ export class ScreepsClient extends EventEmitter {
     private ws: WebSocket | null = null;
     private connected: boolean = false;
     private activeShard: string = 'shard3'; // Default to shard3, will auto-detect from logs
+    private intentionalClose: boolean = false;
+    private pendingConnect:
+        | { resolve: () => void; reject: (err: Error) => void }
+        | undefined;
+    private onToken: ((token: string) => void) | undefined;
 
-    constructor(token: string) {
+    constructor(token: string, opts?: { onToken?: (token: string) => void }) {
         super();
         this.token = token;
+        this.onToken = opts?.onToken;
     }
 
     public async connect() {
+        if (this.pendingConnect) {
+            return;
+        }
+
+        this.emit('status', { state: 'connecting' });
+
         try {
-            // 1. Get User ID via HTTP
             this.emit('log', 'Authenticating...');
             const response = await axios.get('https://screeps.com/api/auth/me', {
                 headers: {
                     'X-Token': this.token,
-                    'X-Username': this.token // Sometimes needed? No, X-Token is standard.
+                    'X-Username': this.token
                 }
             });
+            this.updateTokenFromHeaders(response.headers);
 
-            if (response.data && response.data._id) {
-                this.userId = response.data._id;
-                this.emit('log', `Authenticated as user ID: ${this.userId}`);
-            } else {
+            if (!response.data?._id) {
                 throw new Error('Failed to retrieve user ID');
             }
 
-            // 2. Connect WebSocket
-            this.connectWebSocket();
+            this.userId = response.data._id;
+            this.emit('log', `Authenticated as user ID: ${this.userId}`);
 
+            await this.connectWebSocket();
         } catch (error: any) {
+            this.emit('status', { state: 'disconnected' });
             this.emit('error', `Connection failed: ${error.message}`);
+            throw error;
         }
     }
 
-    private connectWebSocket() {
+    private connectWebSocket(): Promise<void> {
+        this.closeWebSocket(true);
+        this.intentionalClose = false;
+
         // Use raw websocket url mimicking SockJS
         // Format: /socket/<server>/<session>/websocket
         const serverId = Math.floor(Math.random() * 1000);
@@ -50,23 +65,44 @@ export class ScreepsClient extends EventEmitter {
         this.emit('log', `Connecting to WebSocket: ${url}`);
         this.ws = new WebSocket(url);
 
-        this.ws.on('open', () => {
-            this.emit('log', 'WebSocket connected.');
-            this.connected = true;
-            this.authenticateWebSocket();
-        });
+        return new Promise((resolve, reject) => {
+            this.pendingConnect = { resolve, reject };
 
-        this.ws.on('message', (data: WebSocket.RawData) => {
-            this.handleMessage(data.toString());
-        });
+            this.ws?.on('open', () => {
+                this.emit('log', 'WebSocket connected.');
+                this.authenticateWebSocket();
+            });
 
-        this.ws.on('close', () => {
-            this.emit('log', 'WebSocket disconnected.');
-            this.connected = false;
-        });
+            this.ws?.on('message', (data: WebSocket.RawData) => {
+                this.handleMessage(data.toString());
+            });
 
-        this.ws.on('error', (err) => {
-            this.emit('error', `WebSocket error: ${err.message}`);
+            this.ws?.on('close', () => {
+                this.emit('log', 'WebSocket disconnected.');
+
+                const wasConnected = this.connected;
+                this.connected = false;
+
+                const pending = this.pendingConnect;
+                this.pendingConnect = undefined;
+                if (pending) {
+                    pending.reject(new Error('WebSocket closed before authentication completed.'));
+                }
+
+                if (!this.intentionalClose && wasConnected) {
+                    this.emit('status', { state: 'disconnected' });
+                }
+            });
+
+            this.ws?.on('error', (err) => {
+                this.emit('error', `WebSocket error: ${err.message}`);
+
+                const pending = this.pendingConnect;
+                this.pendingConnect = undefined;
+                if (pending) {
+                    pending.reject(new Error(`WebSocket error: ${err.message}`));
+                }
+            });
         });
     }
 
@@ -124,9 +160,25 @@ export class ScreepsClient extends EventEmitter {
 
         if (msg.startsWith('auth ok')) {
             this.emit('log', 'WebSocket Authentication successful.');
+            const parts = msg.split(' ');
+            const nextToken = parts.length >= 3 ? parts[2] : undefined;
+            if (nextToken) {
+                this.setToken(nextToken);
+            }
+            this.connected = true;
             this.subscribeConsole();
+            this.emit('status', { state: 'connected' });
+
+            const pending = this.pendingConnect;
+            this.pendingConnect = undefined;
+            pending?.resolve();
         } else if (msg.startsWith('auth failed')) {
             this.emit('error', 'WebSocket Authentication failed.');
+            this.emit('status', { state: 'disconnected' });
+
+            const pending = this.pendingConnect;
+            this.pendingConnect = undefined;
+            pending?.reject(new Error('WebSocket authentication failed.'));
         } else if (msg.startsWith('time')) {
             // Tick update
         } else if (msg.startsWith('[')) {
@@ -174,24 +226,51 @@ export class ScreepsClient extends EventEmitter {
         }
 
         try {
-            await axios.post('https://screeps.com/api/user/console', {
+            const response = await axios.post('https://screeps.com/api/user/console', {
                 expression: expression,
                 shard: this.activeShard
             }, {
                 headers: {
-                    'X-Token': this.token
+                    'X-Token': this.token,
+                    'X-Username': this.token
                 }
             });
+            this.updateTokenFromHeaders(response.headers);
             // We don't need to log success, the result will come back via WebSocket
         } catch (error: any) {
              this.emit('error', `Command failed: ${error.message}`);
         }
     }
 
-    public disconnect() {
+    private closeWebSocket(silent: boolean) {
         if (this.ws) {
+            this.intentionalClose = true;
             this.ws.close();
             this.ws = null;
+        }
+        this.connected = false;
+        this.pendingConnect = undefined;
+        if (!silent) {
+            this.emit('status', { state: 'disconnected' });
+        }
+    }
+
+    public disconnect() {
+        this.closeWebSocket(false);
+    }
+
+    private setToken(token: string) {
+        if (!token || token === this.token) {
+            return;
+        }
+        this.token = token;
+        this.onToken?.(token);
+    }
+
+    private updateTokenFromHeaders(headers: any) {
+        const nextToken = headers?.['x-token'] ?? headers?.['X-Token'];
+        if (typeof nextToken === 'string' && nextToken.trim()) {
+            this.setToken(nextToken.trim());
         }
     }
 }

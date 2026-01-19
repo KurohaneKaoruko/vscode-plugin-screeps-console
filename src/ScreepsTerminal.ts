@@ -11,8 +11,8 @@ export class ScreepsTerminal implements vscode.Pseudoterminal {
     private client: ScreepsClient;
     private inputBuffer: string = '';
 
-    constructor(token: string) {
-        this.client = new ScreepsClient(token);
+    constructor(token: string, opts?: { onToken?: (token: string) => void }) {
+        this.client = new ScreepsClient(token, opts);
         
         // Wire up client events
         this.client.on('log', (msg) => {
@@ -28,11 +28,20 @@ export class ScreepsTerminal implements vscode.Pseudoterminal {
             const formatted = msg.replace(/\n/g, '\r\n');
             this.writeLine(formatted);
         });
+
+        this.client.on('status', (evt: { state: string }) => {
+            const label =
+                evt.state === 'connecting' ? 'Connecting' :
+                evt.state === 'connected' ? 'Connected' :
+                evt.state === 'reconnecting' ? 'Reconnecting' :
+                'Disconnected';
+            this.writeLine(`\x1b[35m[Status]\x1b[0m ${label}`);
+        });
     }
 
     open(initialDimensions: vscode.TerminalDimensions | undefined): void {
         this.writeLine('Welcome to Screeps Console!');
-        this.client.connect();
+        this.client.connect().catch(() => {});
     }
 
     close(): void {

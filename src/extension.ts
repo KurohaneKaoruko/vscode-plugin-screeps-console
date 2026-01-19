@@ -34,7 +34,9 @@ export function activate(context: vscode.ExtensionContext) {
             return;
         }
 
-        const pty = new ScreepsTerminal(token);
+        const pty = new ScreepsTerminal(token, {
+            onToken: (nextToken) => void context.secrets.store('screeps_token', nextToken)
+        });
         const terminal = vscode.window.createTerminal({
             name: 'Screeps Console',
             pty: pty
@@ -71,7 +73,9 @@ export function activate(context: vscode.ExtensionContext) {
 
             return new vscode.TerminalProfile({
                 name: 'Screeps Console',
-                pty: new ScreepsTerminal(token)
+                pty: new ScreepsTerminal(token, {
+                    onToken: (nextToken) => void context.secrets.store('screeps_token', nextToken)
+                })
             });
         }
     }));

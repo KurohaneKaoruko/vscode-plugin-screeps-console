@@ -19,6 +19,7 @@ export class ScreepsConsoleViewProvider implements vscode.WebviewViewProvider {
     private view: vscode.WebviewView | undefined;
     private client: ScreepsClient | undefined;
     private lastToken: string | undefined;
+    private lastStatusText: string = 'Disconnected';
 
     constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -33,7 +34,7 @@ export class ScreepsConsoleViewProvider implements vscode.WebviewViewProvider {
         webviewView.webview.onDidReceiveMessage(async (raw: IncomingMessage) => {
             switch (raw.type) {
                 case 'ready':
-                    this.post({ type: 'setStatus', text: 'Ready' });
+                    this.post({ type: 'setStatus', text: this.lastStatusText });
                     // Auto-connect if token exists
                     const token = await this.context.secrets.get('screeps_token');
                     if (token) {
@@ -75,7 +76,7 @@ export class ScreepsConsoleViewProvider implements vscode.WebviewViewProvider {
     }
 
     public async reveal(): Promise<void> {
-        await vscode.commands.executeCommand('workbench.view.extension.screeps-console.panel');
+        await vscode.commands.executeCommand('workbench.view.extension.screepsConsolePanel');
         this.view?.show?.(true);
     }
 
@@ -96,16 +97,11 @@ export class ScreepsConsoleViewProvider implements vscode.WebviewViewProvider {
         }
 
         if (this.client && this.lastToken === token) {
-            this.post({ type: 'setStatus', text: 'Connecting…' });
             try {
                 await this.client.connect();
             } catch (err: any) {
                 if (!isAutoConnect) {
                     this.post({ type: 'appendLog', text: `Connection failed: ${err.message}`, kind: 'error' });
-                    this.post({ type: 'setStatus', text: 'Disconnected' });
-                } else {
-                     // Reset status on silent fail
-                     this.post({ type: 'setStatus', text: 'Disconnected' });
                 }
             }
             return;
@@ -114,15 +110,27 @@ export class ScreepsConsoleViewProvider implements vscode.WebviewViewProvider {
         this.disconnect();
 
         this.lastToken = token;
-        this.client = new ScreepsClient(token);
+        this.client = new ScreepsClient(token, {
+            onToken: (nextToken) => {
+                this.lastToken = nextToken;
+                void this.context.secrets.store('screeps_token', nextToken);
+            }
+        });
         this.client.on('log', (msg: string) => this.post({ type: 'appendLog', text: msg, kind: 'system' }));
         this.client.on('error', (msg: string) => this.post({ type: 'appendLog', text: msg, kind: 'error' }));
         this.client.on('console', (msg: string) => this.post({ type: 'appendLog', text: msg, kind: 'log' }));
+        this.client.on('status', (evt: { state: string }) => {
+            const text =
+                evt.state === 'connecting' ? 'Connecting…' :
+                evt.state === 'connected' ? 'Connected' :
+                evt.state === 'reconnecting' ? 'Reconnecting…' :
+                'Disconnected';
+            this.lastStatusText = text;
+            this.post({ type: 'setStatus', text });
+        });
 
-        this.post({ type: 'setStatus', text: 'Connecting…' });
         try {
             await this.client.connect();
-            this.post({ type: 'setStatus', text: 'Connected' });
         } catch (err: any) {
              this.disconnect(); // Ensure clean state
              if (!isAutoConnect) {
@@ -135,6 +143,7 @@ export class ScreepsConsoleViewProvider implements vscode.WebviewViewProvider {
     private disconnect(): void {
         this.client?.disconnect();
         this.client = undefined;
+        this.lastStatusText = 'Disconnected';
         this.post({ type: 'setStatus', text: 'Disconnected' });
     }
 
@@ -360,4 +369,3 @@ export class ScreepsConsoleViewProvider implements vscode.WebviewViewProvider {
         return result;
     }
 }
-
